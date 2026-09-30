@@ -1,0 +1,59 @@
+# P&C insurance claims intake with an LLM that summarises claims and flags possible fraud.
+system: Claims intake
+description: >
+  Policyholders submit claims and upload photos and documents. Adjusters review claims in an
+  internal app. An LLM service reads each claim and its documents to draft a summary and a
+  fraud-risk note for the adjuster; it cannot change the claim.
+
+trust_boundaries:
+  - {id: internet, name: Internet, untrusted: true}
+  - {id: corp, name: Corporate network}
+  - {id: cloud, name: Cloud VPC}
+
+components:
+  - {id: policyholder, name: Policyholder, type: external_entity, boundary: internet}
+  - {id: adjuster, name: Claims adjuster, type: external_entity, boundary: corp}
+  - id: claims_portal
+    name: Claims portal
+    type: process
+    boundary: cloud
+    tech: Angular, Spring Boot
+    rate_limiting: true
+  - id: claims_api
+    name: Claims API
+    type: process
+    boundary: cloud
+    tech: Java 17, Spring Boot
+    input_validation: true
+    audit_logging: true
+    criticality: 4
+  - id: claim_summariser
+    name: Claim summariser
+    type: process
+    boundary: cloud
+    tech: Python, Azure OpenAI
+    llm: {agency: read}
+  - id: claims_db
+    name: Claims database
+    type: data_store
+    boundary: cloud
+    tech: Azure SQL
+    data_classification: confidential
+    encrypted_at_rest: true
+  - id: document_store
+    name: Claim documents
+    type: data_store
+    boundary: cloud
+    tech: Azure Blob Storage
+    data_classification: confidential
+    encrypted_at_rest: true
+
+flows:
+  - {id: f_holder_portal, source: policyholder, target: claims_portal, protocol: HTTPS, authn: session, data: [claim_form, photos]}
+  - {id: f_portal_api, source: claims_portal, target: claims_api, protocol: HTTPS, authn: oauth2, data: [claim_form]}
+  - {id: f_portal_docs, source: claims_portal, target: document_store, protocol: HTTPS, authn: iam, data: [photos, documents]}
+  - {id: f_api_db, source: claims_api, target: claims_db, protocol: TLS, authn: iam, data: [claim]}
+  - {id: f_adjuster_api, source: adjuster, target: claims_api, protocol: HTTPS, authn: oauth2, data: [decisions]}
+  - {id: f_docs_summariser, source: document_store, target: claim_summariser, protocol: HTTPS, authn: iam, data: [documents]}
+  - {id: f_db_summariser, source: claims_db, target: claim_summariser, protocol: TLS, authn: iam, data: [claim]}
+  - {id: f_summariser_api, source: claim_summariser, target: claims_api, protocol: HTTPS, authn: iam, data: [summary]}

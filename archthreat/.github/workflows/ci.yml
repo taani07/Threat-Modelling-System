@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests labs && ruff format --check src tests
+      - run: pytest
+      - name: Lab reference solutions
+        run: LAB_SOLUTION=1 pytest labs
+      - name: Eval gate (rule recall and known false positives)
+        run: archthreat eval
+      - name: Every model in the repo is valid
+        run: for f in samples/*.yaml threatmodels/*.yaml; do archthreat validate "$f"; done
+
+  code-scanning:
+    # Publishes this repo's own threat model to GitHub code scanning (Security tab).
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - run: archthreat sarif threatmodels/archthreat-service.yaml --out threats.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: threats.sarif
+          category: archthreat

@@ -1,0 +1,56 @@
+# Threat model diff on every pull request that touches threatmodels/.
+# Posts a comment with architecture changes and new/resolved threats, and fails the check
+# when the change introduces a new HIGH or CRITICAL threat.
+#
+# Uses `pull_request` (not `pull_request_target`) so code from forks never runs with a write
+# token. On fork PRs the token is read-only, so the comment step is skipped and the check still runs.
+name: threat-model
+
+on:
+  pull_request:
+    paths: ["threatmodels/**"]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: Diff each model against the base branch
+        id: diff
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          status=0
+          : > comment.md
+          for f in threatmodels/*.yaml; do
+            if git show "origin/${BASE_REF}:${f}" > /tmp/base.yaml 2>/dev/null; then
+              archthreat diff /tmp/base.yaml "$f" --out /tmp/part.md --fail-on-new high > /dev/null || status=1
+            else
+              archthreat diff "$f" "$f" > /dev/null  # validates the new model
+              { echo "### ArchThreat: new model \`$f\`"; echo; archthreat analyze "$f"; } > /tmp/part.md
+            fi
+            cat /tmp/part.md >> comment.md
+            echo >> comment.md
+          done
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+      - name: Comment on the pull request
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR" --body-file comment.md --edit-last || gh pr comment "$PR" --body-file comment.md
+      - name: Fail on new high or critical threats
+        if: steps.diff.outputs.status == '1'
+        run: |
+          echo "This change introduces new high or critical threats. See the PR comment."
+          exit 1

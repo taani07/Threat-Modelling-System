@@ -1,0 +1,54 @@
+# Golden threat-model cases. must_find: threats a correct analysis MUST raise.
+# must_not_find: plausible-looking false positives that a correct analysis must NOT raise
+# (each documents a design intent, e.g. a pull flow is not an inbound attack surface).
+thresholds:
+  rule_recall: 1.0
+  negative_precision: 1.0
+
+cases:
+  - model: samples/payments-platform.yaml
+    must_find:
+      - {rule: AUTH-002, element: f_network_webhook}     # static key from the card network
+      - {rule: DATA-001, element: reporting_db}          # confidential, not encrypted at rest
+      - {rule: EOP-001, element: admin_console}          # runs as root
+      - {rule: EOP-002, element: admin_console}          # admin UI reachable from the internet
+      - {rule: AUTH-001, element: f_admin_reporting}     # no auth to the reporting DB
+      - {rule: CRYPTO-001, element: f_admin_reporting}   # plaintext DB protocol across subnets
+      - {rule: AUDIT-001, element: admin_console}        # touches confidential data, no audit log
+      - {rule: DOS-001, element: payments_service}       # accepts partner webhooks, no rate limit
+    must_not_find:
+      - {rule: AUTH-001, element: f_customer_api}        # OAuth 2.0
+      - {rule: AUTH-001, element: f_payments_vault}      # IAM
+      - {rule: DATA-001, element: card_vault}            # encrypted at rest
+      - {rule: DOS-001, element: api_gateway}            # rate limited
+      - {rule: INPUT-001, element: payments_service}     # validates input
+
+  - model: samples/payments-platform-v2.yaml
+    must_find:
+      - {rule: AUTH-001, element: f_merchant_upload}
+      - {rule: CRYPTO-001, element: f_merchant_upload}
+      - {rule: CRYPTO-002, element: f_merchant_upload}
+      - {rule: INPUT-001, element: merchant_portal}
+    must_not_find:
+      - {rule: DATA-001, element: reporting_db}          # fixed in v2
+
+  - model: samples/rag-assistant.yaml
+    must_find:
+      - {rule: LLM-001, element: orchestrator}           # indirect injection via ingested web pages
+      - {rule: LLM-002, element: orchestrator}           # can send email / create tickets
+      - {rule: LLM-003, element: orchestrator}           # reads restricted HR records
+      - {rule: INPUT-001, element: ingest_job}           # pulls untrusted web content
+    must_not_find:
+      - {rule: AUTH-001, element: f_docs_ingest}         # pull flow: the job is the client
+      - {rule: DOS-001, element: ingest_job}             # nobody can connect to it
+      - {rule: AUTH-002, element: f_orch_ticketing}      # outbound key, not an inbound surface
+
+  - model: samples/claims-portal.yaml
+    must_find:
+      - {rule: LLM-001, element: claim_summariser}       # reads policyholder uploads
+      - {rule: LLM-003, element: claim_summariser}       # reads confidential claims
+      - {rule: INPUT-001, element: claims_portal}
+    must_not_find:
+      - {rule: LLM-002, element: claim_summariser}       # read-only agency
+      - {rule: DOS-001, element: claims_portal}          # rate limited
+      - {rule: DOS-001, element: claims_api}             # not internet-facing

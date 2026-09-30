@@ -1,0 +1,40 @@
+# ArchThreat's own threat model, deployed as a hosted API. Edits to this file get a threat
+# diff comment on the pull request (see .github/workflows/threat-model-pr.yml).
+system: ArchThreat hosted service
+description: >
+  Users submit system models over the REST API. The service runs deterministic rules and,
+  optionally, asks a hosted LLM for extra threats using a local knowledge index.
+
+trust_boundaries:
+  - {id: internet, name: Internet, untrusted: true}
+  - {id: service, name: ArchThreat container}
+  - {id: model_provider, name: LLM provider}
+
+components:
+  - {id: user, name: API user, type: external_entity, boundary: internet}
+  - {id: llm_provider, name: Hosted LLM API, type: external_entity, boundary: model_provider}
+  - id: api
+    name: ArchThreat API
+    type: process
+    boundary: service
+    tech: Python 3.12, FastAPI, Pydantic
+    rate_limiting: true
+    input_validation: true
+  - id: enricher
+    name: LLM enrichment
+    type: process
+    boundary: service
+    tech: Python
+    llm: {agency: none}
+  - id: knowledge_index
+    name: Knowledge index
+    type: data_store
+    boundary: service
+    tech: numpy files on local disk
+    data_classification: public
+
+flows:
+  - {id: f_user_api, source: user, target: api, protocol: HTTPS, authn: apikey, data: [system_model]}
+  - {id: f_api_enricher, source: api, target: enricher, protocol: in-process, authn: iam, data: [system_model]}
+  - {id: f_index_enricher, source: knowledge_index, target: enricher, protocol: file, authn: iam, data: [guidance]}
+  - {id: f_enricher_llm, source: enricher, target: llm_provider, protocol: HTTPS, authn: apikey, data: [prompt]}

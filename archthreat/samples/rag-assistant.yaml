@@ -1,0 +1,62 @@
+# An internal HR and IT assistant built with RAG and tool use. Shows how ArchThreat finds
+# indirect prompt injection: public web pages reach the LLM through the ingestion pipeline.
+system: Employee help assistant
+description: >
+  Employees ask questions in a chat UI. An orchestrator retrieves policy documents and HR
+  records, calls a hosted model, and can create IT tickets and send emails on the user's behalf.
+  A nightly job ingests public vendor documentation from the web into the vector store.
+
+trust_boundaries:
+  - {id: internet, name: Public web, untrusted: true}
+  - {id: corp, name: Corporate network}
+  - {id: aws, name: AWS account}
+  - {id: model_provider, name: Model provider}
+
+components:
+  - {id: employee, name: Employee, type: external_entity, boundary: corp}
+  - {id: vendor_docs, name: Vendor documentation sites, type: external_entity, boundary: internet}
+  - {id: foundation_model, name: Foundation model (Bedrock), type: external_entity, boundary: model_provider}
+  - {id: ticketing, name: IT ticketing SaaS, type: external_entity, boundary: internet}
+  - id: chat_api
+    name: Chat API
+    type: process
+    boundary: aws
+    tech: Python, FastAPI on ECS
+    input_validation: true
+    audit_logging: true
+  - id: orchestrator
+    name: LLM orchestrator
+    type: process
+    boundary: aws
+    tech: Python, LangGraph
+    tags: [llm]
+    llm: {agency: write, tools: [create_ticket, send_email]}
+  - id: ingest_job
+    name: Web ingestion job
+    type: process
+    boundary: aws
+    tech: Python, scheduled Lambda
+  - id: vector_store
+    name: Policy vector store
+    type: data_store
+    boundary: aws
+    tech: OpenSearch Serverless
+    data_classification: internal
+    encrypted_at_rest: true
+  - id: hr_db
+    name: HR records
+    type: data_store
+    boundary: aws
+    tech: Aurora PostgreSQL
+    data_classification: restricted
+    encrypted_at_rest: true
+
+flows:
+  - {id: f_employee_chat, source: employee, target: chat_api, protocol: HTTPS, authn: oauth2, data: [question]}
+  - {id: f_chat_orch, source: chat_api, target: orchestrator, protocol: HTTPS, authn: iam, data: [question, user_identity]}
+  - {id: f_docs_ingest, source: vendor_docs, target: ingest_job, pull: true, protocol: HTTPS, authn: none, data: [web_pages]}
+  - {id: f_ingest_vectors, source: ingest_job, target: vector_store, protocol: HTTPS, authn: iam, data: [chunks, embeddings]}
+  - {id: f_vectors_orch, source: vector_store, target: orchestrator, protocol: HTTPS, authn: iam, data: [chunks]}
+  - {id: f_hr_orch, source: hr_db, target: orchestrator, protocol: TLS, authn: iam, data: [employee_records]}
+  - {id: f_orch_model, source: orchestrator, target: foundation_model, protocol: HTTPS, authn: iam, data: [prompt]}
+  - {id: f_orch_ticketing, source: orchestrator, target: ticketing, protocol: HTTPS, authn: apikey, data: [ticket]}

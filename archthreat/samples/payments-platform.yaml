@@ -1,0 +1,79 @@
+# Payments platform: customers pay merchants; card data is tokenised in a vault.
+system: Payments platform
+description: >
+  Mobile and web customers pay merchants through an API. Card data is stored in a
+  tokenisation vault; settlements come back from the card network by webhook. Operations
+  staff use an admin console that also reads a reporting database.
+
+trust_boundaries:
+  - {id: internet, name: Internet, untrusted: true}
+  - {id: partner, name: Card network, untrusted: true}
+  - {id: aws_public, name: AWS public subnets}
+  - {id: aws_private, name: AWS private subnets}
+
+components:
+  - id: customer
+    name: Customer (mobile / web)
+    type: external_entity
+    boundary: internet
+  - id: operator
+    name: Operations staff
+    type: external_entity
+    boundary: internet
+  - id: card_network
+    name: Card network
+    type: external_entity
+    boundary: partner
+  - id: api_gateway
+    name: API Gateway + WAF
+    type: process
+    boundary: aws_public
+    tech: AWS API Gateway, AWS WAF
+    rate_limiting: true
+    input_validation: true
+    audit_logging: true
+  - id: payments_service
+    name: Payments service
+    type: process
+    boundary: aws_private
+    tech: Java 21, Spring Boot 3 on EKS
+    criticality: 5
+    audit_logging: true
+    input_validation: true
+  - id: admin_console
+    name: Ops admin console
+    type: process
+    boundary: aws_public
+    tech: React, Node.js 20
+    admin_interface: true
+    runs_as_root: true
+  - id: card_vault
+    name: Card vault
+    type: data_store
+    boundary: aws_private
+    tech: PostgreSQL on RDS
+    data_classification: restricted
+    encrypted_at_rest: true
+  - id: reporting_db
+    name: Reporting database
+    type: data_store
+    boundary: aws_private
+    tech: PostgreSQL on EC2
+    data_classification: confidential
+  - id: audit_store
+    name: Audit log bucket
+    type: data_store
+    boundary: aws_private
+    tech: S3 with Object Lock
+    data_classification: internal
+    encrypted_at_rest: true
+
+flows:
+  - {id: f_customer_api, source: customer, target: api_gateway, protocol: HTTPS, authn: oauth2, data: [credentials, card_data]}
+  - {id: f_api_payments, source: api_gateway, target: payments_service, protocol: HTTPS, authn: mtls, data: [card_data]}
+  - {id: f_payments_vault, source: payments_service, target: card_vault, protocol: TLS, authn: iam, data: [card_data]}
+  - {id: f_payments_network, source: payments_service, target: card_network, protocol: HTTPS, authn: mtls, data: [card_data]}
+  - {id: f_network_webhook, source: card_network, target: payments_service, protocol: HTTPS, authn: apikey, data: [settlement_status]}
+  - {id: f_payments_audit, source: payments_service, target: audit_store, protocol: HTTPS, authn: iam, data: [audit_events]}
+  - {id: f_operator_admin, source: operator, target: admin_console, protocol: HTTPS, authn: session, data: [credentials]}
+  - {id: f_admin_reporting, source: admin_console, target: reporting_db, protocol: PostgreSQL wire, authn: none, encrypted: false, data: [transactions]}
